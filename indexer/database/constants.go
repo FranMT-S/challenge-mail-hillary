@@ -1,6 +1,6 @@
 package database
 
 const (
-	DBTableName     = "emails_hillary"
-	DBTableNameTest = "emails_hillary_test"
+	DBSchemaName     string = "emails_hillary"
+	DBSchemaNameTest string = "emails_hillary_test"
 )

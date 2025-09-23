@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"indexer/models"
@@ -12,6 +14,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Scrapper represents the scraper
+// parallelism: number of parallel requests
+// delay: delay between requests in seconds
 type Scrapper struct {
 	parallelism int
 	delay       int
@@ -54,6 +59,13 @@ func (p PaginationWikileaks) IsValid() bool {
 		p == PaginationWikileaks200
 }
 
+// ScrapeEmails scrapes emails from the WikiLeaks API
+// fromPage: start page
+// toPage: end page
+// pagination: pagination parameter
+// emailsQueue: channel to send the emails
+// pagesQueueUpdater: channel to update the pages state
+// intervalUpdate: interval to update the pages state
 func (s *Scrapper) ScrapeEmails(fromPage int, toPage int, pagination PaginationWikileaks, emailsQueue chan<- models.EmailResult, pagesQueueUpdater chan<- models.PageResult, intervalUpdate int) error {
 
 	if emailsQueue == nil {
@@ -69,6 +81,7 @@ func (s *Scrapper) ScrapeEmails(fromPage int, toPage int, pagination PaginationW
 		return fmt.Errorf("the pagination send is not supported by the api: %d", pagination)
 	}
 
+	semaphore := models.NewSemaphore(50)
 	c := SetupWikileaksCollector(s.parallelism, s.delay, true)
 
 	c.OnRequest(func(r *colly.Request) {
@@ -76,65 +89,72 @@ func (s *Scrapper) ScrapeEmails(fromPage int, toPage int, pagination PaginationW
 	})
 
 	c.OnHTML(".table.search-result tbody", func(e *colly.HTMLElement) {
-		total := 0
-		e.ForEach("tr", func(i int, row *colly.HTMLElement) {
-			total++
+		var total int64 = 0
+		var wg sync.WaitGroup
 
-			// update page state every intervalUpdate rows
-			if pagesQueueUpdater != nil && total%intervalUpdate == 0 {
+		// process rows
+		e.ForEach("tr", func(i int, row *colly.HTMLElement) {
+			semaphore.Acquire()
+			wg.Add(1)
+			go func() {
+				defer semaphore.Release()
+				defer wg.Done()
+				current := atomic.AddInt64(&total, 1)
+
+				// update page state every intervalUpdate rows
+				if pagesQueueUpdater != nil && int(current)%intervalUpdate == 0 {
+					pageStr := e.Request.Ctx.Get("page")
+					page, err := strconv.Atoi(pageStr)
+
+					if err == nil {
+						s.updatePageState(pagesQueueUpdater, page, int(current), nil, models.PageResultStateProcessing)
+					}
+				}
+
+				err := error(nil)
+				email := models.Email{}
+
+				// log every 10 rows just in debug
 				pageStr := e.Request.Ctx.Get("page")
-				page, err := strconv.Atoi(pageStr)
+
+				row.ForEach("td", func(tdIndex int, columns *colly.HTMLElement) {
+					// if there is an error, stop processing the row
+					if err != nil {
+						return
+					}
+					err = processRow(tdIndex, columns, &email)
+					if err != nil {
+						log.WithFields(log.Fields{"error": err, "id": email.ID}).Error("Error processing email")
+					}
+
+					// scrapt email content if it is the last column
+					if tdIndex == 4 && email.ID > 0 {
+						content, err := getMailContent(email.ID, c)
+						if err != nil {
+							log.WithFields(log.Fields{"error": err, "id": email.ID}).Error("Error getting email content")
+						}
+						email.Content = content
+					}
+				})
+
+				// log every 10 rows just in debug
+				if current%10 == 0 {
+					log.Trace("Page ", pageStr, " processed ", current, " rows")
+				}
 
 				if err == nil {
-					s.updatePageState(pagesQueueUpdater, page, total, nil, models.PageResultStateProcessing)
-				}
-			}
-
-			err := error(nil)
-			email := models.Email{}
-
-			// log every 10 rows just in debug
-			pageStr := e.Request.Ctx.Get("page")
-			if total%10 == 0 {
-				log.Debug("Row ", i, " Start Processing Columns, page ", pageStr)
-			}
-
-			row.ForEach("td", func(tdIndex int, columns *colly.HTMLElement) {
-				// if there is an error, stop processing the row
-				if err != nil {
-					return
-				}
-				err = processRow(tdIndex, columns, &email)
-				if err != nil {
-					log.WithFields(log.Fields{"error": err, "id": email.ID}).Error("Error processing email")
+					e.Request.Ctx.Put("error", "")
+				} else {
+					e.Request.Ctx.Put("error", err.Error())
 				}
 
-				// scrapt email content if it is the last column
-				if tdIndex == 4 && email.ID > 0 {
-					content, err := getMailContent(email.ID, c)
-					if err != nil {
-						log.WithFields(log.Fields{"error": err, "id": email.ID}).Error("Error getting email content")
-					}
-					email.Content = content
-				}
-			})
+				emailsQueue <- models.EmailResult{Email: &email, Error: err}
 
-			// log every 10 rows just in debug
-			if total%10 == 0 {
-				log.Debug("Row ", i, " Finish Processing Columns, page ", pageStr)
-			}
-
-			if err == nil {
-				e.Request.Ctx.Put("error", "")
-			} else {
-				e.Request.Ctx.Put("error", err.Error())
-			}
-
-			log.WithFields(log.Fields{"id": email.ID}).Debug("Scraped email")
-			emailsQueue <- models.EmailResult{Email: &email, Error: err}
+			}()
 		})
 
-		e.Request.Ctx.Put("total", strconv.Itoa(total))
+		wg.Wait()
+		e.Request.Ctx.Put("total", strconv.Itoa(int(total)))
 	})
 
 	// update page state when the page is finished
@@ -223,6 +243,7 @@ func (s *Scrapper) GetLastPage(pagination PaginationWikileaks) (int, error) {
 	return lastPage, nil
 }
 
+// getPageUrlWithPagination gets the url of the page with the pagination
 func (s *Scrapper) getPageUrlWithPagination(page int, pagination PaginationWikileaks) string {
 	return fmt.Sprintf("https://wikileaks.org/clinton-emails/?q=&mfrom=&mto=&title=&notitle=&date_from=&date_to=&nofrom=&noto=&sort=0&count=%d&page=%d#searchresult", pagination, page)
 }
@@ -243,7 +264,7 @@ func processRow(tdIndex int, column *colly.HTMLElement, email *models.Email) err
 		email.ID = uint32(id)
 	case 1:
 		str := column.Text
-		layout := "2006-01-02 15:04" // layout obligatorio en Go
+		layout := "2006-01-02 15:04"
 
 		t, err := time.Parse(layout, str)
 		if err != nil {
@@ -276,6 +297,8 @@ func getMailContent(id uint32, c *colly.Collector) (string, error) {
 		Delay:      1 * time.Second,
 	})
 
+	collectorContent.Async = true
+
 	var err error
 	var html string
 	collectorContent.OnHTML("div#content", func(e *colly.HTMLElement) {
@@ -291,6 +314,8 @@ func getMailContent(id uint32, c *colly.Collector) (string, error) {
 		log.Error("Error visiting email content:", err)
 		return "", err
 	}
+
+	collectorContent.Wait()
 
 	return SanitizeHTML(html), nil
 }

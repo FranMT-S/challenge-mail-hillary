@@ -6,8 +6,8 @@ import (
 	"indexer/models"
 )
 
+// Status shows the status of the indexing process
 func (c *Cmd) Status() {
-
 	if c.status.Len() == 0 {
 		loadedStatus, err := c.LoadPageResults(statusDirectory, statusFilename)
 		if err == nil {

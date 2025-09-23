@@ -5,6 +5,7 @@ type EmailResult struct {
 	Error error  `json:"error"`
 }
 
+// PageResultStateType represents the state of a page
 type PageResultStateType string
 
 const (
@@ -13,6 +14,11 @@ const (
 	PageResultStateFinished   PageResultStateType = "finished"
 )
 
+// PageResult represents the result of a page
+// Page: Page number
+// Error: Error message
+// Total: Total number of emails
+// State: State of the page
 type PageResult struct {
 	Page  int                 `json:"page"`
 	Error string              `json:"error"`

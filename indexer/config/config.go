@@ -3,10 +3,16 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 
 	_ "github.com/joho/godotenv/autoload"
 )
 
+// Config represents the configuration for the indexer
+// Env: Environment
+// DBConfig: Database configuration
+// Scrapper: Scraper configuration
+// LogLevel: Log level
 type Config struct {
 	Env      string
 	DBConfig struct {
@@ -21,6 +27,7 @@ type Config struct {
 		Parallelism int
 		Delay       int
 	}
+	LogLevel string
 }
 
 var config *Config
@@ -33,6 +40,15 @@ func InitConfigEnviroment() {
 	config.DBConfig.Password = os.Getenv("DB_PASSWORD")
 	config.DBConfig.Port = os.Getenv("DB_PORT")
 	config.DBConfig.SSL = os.Getenv("DB_SSL") == "true"
+	config.LogLevel = os.Getenv("LOG_LEVEL")
+
+	if config.LogLevel == "" {
+		config.LogLevel = "info"
+	}
+
+	if strings.ToLower(config.Env) == "prod" {
+		config.LogLevel = "warn"
+	}
 
 	var err error
 	config.Scrapper.Parallelism, err = strconv.Atoi(os.Getenv("SCRAPPER_PARALLELISM"))

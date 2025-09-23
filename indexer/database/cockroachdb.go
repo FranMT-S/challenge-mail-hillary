@@ -118,7 +118,7 @@ func (c *Connection) OpenWithPool(maxOpenConns, maxIdleConns int) (*sql.DB, erro
 
 // SendMails sends the emails to the database
 // the mails is send in batches
-func (c *Connection) SendMails(tableName string, emails []models.Email) (int64, error) {
+func (c *Connection) SendMails(schemaName string, emails []models.Email) (int64, error) {
 	if err := ValidateDBConnection(c.DB); err != nil {
 		return 0, err
 	}
@@ -127,71 +127,43 @@ func (c *Connection) SendMails(tableName string, emails []models.Email) (int64, 
 		return 0, nil
 	}
 
-	query, valueArgs, err := c.createInsertQuery(tableName, emails)
+	query, valueArgs, err := c.createInsertQuery(schemaName, emails)
 	if err != nil {
 		return 0, err
 	}
 
-	res, err := c.DB.Exec(query, valueArgs...)
+	querySearchVector, valueArgsSearchVector, err := c.createSearchVectorQuery(schemaName, emails)
+	if err != nil {
+		return 0, err
+	}
+
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	defer tx.Rollback()
+
+	rows, err := tx.Exec(query, valueArgs...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to batch insert emails: %w", err)
 	}
 
-	// get affected rows
-	rows, err := res.RowsAffected()
+	_, err = tx.Exec(querySearchVector, valueArgsSearchVector...)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+		return 0, fmt.Errorf("failed to batch insert emails search vector: %w", err)
 	}
 
-	return rows, nil
-}
-
-// IsTableCreated checks if the table exists in the database
-func (c *Connection) IsTableCreated(tableName string) (bool, error) {
-	if err := ValidateDBConnection(c.DB); err != nil {
-		return false, err
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	if err := ValidateTableName(tableName); err != nil {
-		return false, err
-	}
-
-	var exists bool
-	row := c.DB.QueryRow("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)", tableName)
-	if err := row.Scan(&exists); err != nil {
-		return false, fmt.Errorf("error checking if table exists: %w", err)
-	}
-	return exists, nil
-}
-
-// DropTable drops the table if it exists
-func (c *Connection) DropTable(tableName string) error {
-	if err := ValidateDBConnection(c.DB); err != nil {
-		return err
-	}
-
-	query, err := c.createDropTableQuery(tableName)
+	rowsInserted, err := rows.RowsAffected()
 	if err != nil {
-		return err
-	}
-	_, err = c.DB.Exec(query)
-	return err
-}
-
-// CreateTableIfNotExists creates the table if it does not exist
-func (c *Connection) CreateTableIfNotExists(tableName string) error {
-	if err := ValidateDBConnection(c.DB); err != nil {
-		return err
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
 	}
 
-	query, err := c.createTableIfNotExistQuery(tableName)
-	if err != nil {
-		return err
-	}
-
-	_, err = c.DB.Exec(query)
-	return err
-
+	return rowsInserted, nil
 }
 
 // Ping checks if the database is reachable
@@ -222,54 +194,133 @@ func (c *Connection) BuildConnectionString() string {
 	)
 }
 
-// createTableIfNotExistQuery creates the create table query
+// CreateSchemaIfNotExist creates the schema if it does not exist
 // validates tableName
-func (c *Connection) createTableIfNotExistQuery(tableName string) (string, error) {
-	if err := ValidateTableName(tableName); err != nil {
-		return "", err
+func (c *Connection) CreateSchemaIfNotExist(schemaName string) error {
+
+	if err := ValidateIsSafeString(schemaName); err != nil {
+		return fmt.Errorf("invalid schema name: %s", schemaName)
 	}
 
-	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-		id INT PRIMARY KEY,
-		date TIMESTAMP WITH TIME ZONE NOT NULL,
-		subject TEXT,
-		"from" TEXT NOT NULL,
-		"to" TEXT NOT NULL,
-		content TEXT
-	);`, tableName)
+	_, err := c.DB.Exec(fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s";`, schemaName))
+	if err != nil {
+		return fmt.Errorf("error creating schema: %w", err)
+	}
 
-	return query, nil
+	queries := []string{
+		fmt.Sprintf(`
+					CREATE TABLE IF NOT EXISTS "%s".emails (
+							id INT PRIMARY KEY,
+							date TIMESTAMP WITH TIME ZONE NOT NULL,
+							subject TEXT DEFAULT '',
+							"from" TEXT DEFAULT '',
+							"to" TEXT DEFAULT '',
+							content TEXT DEFAULT ''
+					);
+			`, schemaName),
+		fmt.Sprintf(`
+					CREATE TABLE IF NOT EXISTS "%s".emails_search (
+							id INT PRIMARY KEY,
+							search_vector TSVECTOR,
+							FOREIGN KEY (id) REFERENCES "%s".emails(id)
+					);
+			`, schemaName, schemaName),
+		fmt.Sprintf(`CREATE INVERTED INDEX IF NOT EXISTS idx_emails_search_vector
+									ON "%s".emails_search (search_vector);`, schemaName),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_emails_date
+									ON "%s".emails (date);`, schemaName),
+	}
+
+	for _, q := range queries {
+		if _, err := c.DB.Exec(q); err != nil {
+			return fmt.Errorf("error executing query: %w", err)
+		}
+	}
+
+	return nil
 }
 
-// createDropTableQuery creates the drop table query and validate tableName is correct
-func (c *Connection) createDropTableQuery(tableName string) (string, error) {
-	if err := ValidateTableName(tableName); err != nil {
-		return "", err
+func (c *Connection) IsSchemaCreated(schemaName string) (bool, error) {
+	query := `SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.schemata
+    WHERE schema_name = $1
+	) AS schema_exists;`
+
+	var exists bool
+	err := c.DB.QueryRow(query, schemaName).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("error checking if schema exists: %w", err)
 	}
-	return fmt.Sprintf("DROP TABLE IF EXISTS %s;", tableName), nil
+
+	return exists, nil
 }
 
 // createInsertQuery creates the insert query and validate tableName is correct
-func (c *Connection) createInsertQuery(tableName string, emails []models.Email) (query string, valueArgs []any, err error) {
-	if err := ValidateTableName(tableName); err != nil {
+func (c *Connection) createInsertQuery(schemaName string, emails []models.Email) (query string, valueArgs []any, err error) {
+	valuesFlags := make([]string, 0, len(emails))
+	valueArgs = make([]any, 0, len(emails)*6)
+
+	if err := ValidateIsSafeString(schemaName); err != nil {
 		return "", nil, err
 	}
 
-	valueStrings := make([]string, 0, len(emails))
-	valueArgs = make([]any, 0, len(emails)*6)
+	// generate a bulkInsert query
 	for i, e := range emails {
-		// placeholders: ($1, $2, $3, $4, $5, $6), ($7, $8, $9, $10, $11, $12), ...
+		// placeholders: ($1, $2, $3, $4, $5, $6), ($7, $8, $9, $10, $11, $12),...
 		n := i*6 + 1
-		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)", n, n+1, n+2, n+3, n+4, n+5))
+		id := n
+		date := n + 1
+		subject := n + 2
+		from := n + 3
+		to := n + 4
+		content := n + 5
+
+		mailValueFlag := fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)", id, date, subject, from, to, content)
+		valuesFlags = append(valuesFlags, mailValueFlag)
 		valueArgs = append(valueArgs, e.ID, e.Date, e.Subject, e.From, e.To, e.Content)
 	}
 
 	// build insert query with placeholders
 	query = fmt.Sprintf(`
-		INSERT INTO %s (id, date, subject, "from", "to", content)
+		INSERT INTO "%s".emails (id, date, subject, "from", "to", content)
 		VALUES %s
 		ON CONFLICT (id) DO NOTHING;
-	`, tableName, strings.Join(valueStrings, ","))
+	`, schemaName, strings.Join(valuesFlags, ","))
+
+	return query, valueArgs, nil
+}
+
+// createInsertQuery creates the insert query and validate tableName is correct
+func (c *Connection) createSearchVectorQuery(schemaName string, emails []models.Email) (query string, valueArgs []any, err error) {
+	valuesFlags := make([]string, 0, len(emails))
+	valueArgs = make([]any, 0, len(emails)*5)
+
+	if err := ValidateIsSafeString(schemaName); err != nil {
+		return "", nil, err
+	}
+
+	// generate a bulkInsert query safe to insert search vector
+	for i, e := range emails {
+		n := i*5 + 1
+		id := n
+		subject := n + 1
+		from := n + 2
+		to := n + 3
+		content := n + 4
+
+		searchVectorValue := fmt.Sprintf("($%d, to_tsvector('english', $%d || ' ' || $%d || ' ' || $%d || ' ' || $%d))", id, subject, from, to, content)
+
+		valuesFlags = append(valuesFlags, searchVectorValue)
+		valueArgs = append(valueArgs, e.ID, e.Subject, e.From, e.To, e.Content)
+	}
+
+	// build insert query with placeholders
+	query = fmt.Sprintf(`
+		INSERT INTO "%s".emails_search (id, search_vector)
+		VALUES %s
+		ON CONFLICT (id) DO NOTHING;
+	`, schemaName, strings.Join(valuesFlags, ","))
 
 	return query, valueArgs, nil
 }

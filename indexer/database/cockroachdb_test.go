@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,10 +26,13 @@ func getConn() (*Connection, error) {
 func TestIntegration_Flow(t *testing.T) {
 
 	TestConnection(t)
-	TestCreateTable(t)
-	TestIsTableCreated(t)
+	TestCreateSchema(t)
+	TestIsSchemaCreated(t)
 	TestSendMails(t)
-
+	conn, _ := getConn()
+	_, _ = conn.Open()
+	defer conn.Close()
+	defer conn.DB.Exec(fmt.Sprintf(`DROP SCHEMA IF EXISTS %s CASCADE;`, DBSchemaNameTest))
 }
 
 // TestConnection tests the connection to the database
@@ -47,23 +51,7 @@ func TestConnection(t *testing.T) {
 	})
 }
 
-func TestIsTableCreated(t *testing.T) {
-	t.Run("Must be return true if the table exists", func(t *testing.T) {
-		conn, err := getConn()
-		assert.NoError(t, err)
-
-		_, err = conn.Open()
-		assert.NoError(t, err)
-		defer conn.Close()
-
-		exists, err := conn.IsTableCreated(DBTableNameTest)
-		assert.NoError(t, err)
-		assert.True(t, exists)
-
-	})
-}
-
-func TestCreateTable(t *testing.T) {
+func TestCreateSchema(t *testing.T) {
 	conn, err := getConn()
 	assert.NoError(t, err)
 
@@ -73,11 +61,26 @@ func TestCreateTable(t *testing.T) {
 	defer conn.Close()
 
 	// if exists drop it
-	assert.NoError(t, conn.DropTable(DBTableNameTest))
-	assert.NoError(t, conn.CreateTableIfNotExists(DBTableNameTest))
-	exists, err := conn.IsTableCreated(DBTableNameTest)
+	assert.NoError(t, conn.CreateSchemaIfNotExist("test_query"))
+	exists, err := conn.IsSchemaCreated("test_query")
 	assert.NoError(t, err)
 	assert.True(t, exists)
+}
+
+func TestIsSchemaCreated(t *testing.T) {
+	t.Run("Must be return true if the table exists", func(t *testing.T) {
+		conn, err := getConn()
+		assert.NoError(t, err)
+
+		_, err = conn.Open()
+		assert.NoError(t, err)
+		defer conn.Close()
+
+		exists, err := conn.IsSchemaCreated(DBSchemaNameTest)
+		assert.NoError(t, err)
+		assert.True(t, exists)
+
+	})
 }
 
 func TestSendMails(t *testing.T) {
@@ -87,14 +90,21 @@ func TestSendMails(t *testing.T) {
 	_, err = conn.Open()
 	assert.NoError(t, err)
 
-	_, err = conn.DB.Exec("DELETE FROM " + DBTableNameTest + ";")
-	assert.NoError(t, err)
+	truncateQuery := fmt.Sprintf(`
+	delete from %s.emails_search;
+	delete from %s.emails; 
+	`, DBSchemaNameTest, DBSchemaNameTest)
+	_, err = conn.DB.Exec(truncateQuery)
+	if err != nil {
+		assert.Fail(t, err.Error())
+		return
+	}
 	defer conn.Close()
-	defer conn.DB.Exec("DELETE FROM " + DBTableNameTest + ";")
 
-	// send empty batch
+	defer conn.DB.Exec(truncateQuery)
+
 	t.Run("Must be able to send an empty batch", func(t *testing.T) {
-		rows, err := conn.SendMails(DBTableNameTest, []models.Email{})
+		rows, err := conn.SendMails(DBSchemaNameTest, []models.Email{})
 		assert.NoError(t, err)
 		assert.Equal(t, int64(0), rows)
 	})
@@ -111,9 +121,15 @@ func TestSendMails(t *testing.T) {
 	}
 
 	t.Run("Must be 1 row in the table", func(t *testing.T) {
-		rows, err := conn.SendMails(DBTableNameTest, testMails)
+		rows, err := conn.SendMails(DBSchemaNameTest, testMails)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), rows)
+		var total int64
+		conn.DB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s.emails;`, DBSchemaNameTest)).Scan(&total)
+		assert.Equal(t, int64(1), total)
+		var searchVectorTotal int64
+		conn.DB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s.emails_search;`, DBSchemaNameTest)).Scan(&searchVectorTotal)
+		assert.Equal(t, int64(1), searchVectorTotal)
 	})
 
 	testMails = []models.Email{
@@ -151,15 +167,18 @@ func TestSendMails(t *testing.T) {
 		},
 	}
 
-	t.Run("Must be 4 rows in the table", func(t *testing.T) {
+	t.Run("Must be 4 rows in the table and insert 3 rows", func(t *testing.T) {
 		var count int64
-		rows, err := conn.SendMails(DBTableNameTest, testMails)
+		rowsInserted, err := conn.SendMails(DBSchemaNameTest, testMails)
 		assert.NoError(t, err)
-		assert.Equal(t, int64(3), rows)
+		assert.Equal(t, int64(3), rowsInserted)
 
-		err = conn.DB.QueryRow("SELECT COUNT(*) FROM " + DBTableNameTest).Scan(&count)
+		err = conn.DB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s.emails;`, DBSchemaNameTest)).Scan(&count)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(4), count)
+		var searchVectorTotal int64
+		conn.DB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s.emails_search;`, DBSchemaNameTest)).Scan(&searchVectorTotal)
+		assert.Equal(t, int64(4), searchVectorTotal)
 	})
 
 }

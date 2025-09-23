@@ -9,26 +9,29 @@ import (
 	"strings"
 	"sync"
 
+	"indexer/config"
 	"indexer/database"
 	"indexer/models"
 	"indexer/scraper"
 )
 
+// Cmd represents the command line interface for the indexer
 type Cmd struct {
-	lastPage       int
-	scrapper       *scraper.Scrapper
-	isScraping     bool
-	status         *models.SafeMap
-	indexer        *database.Indexer
-	mu             *sync.Mutex
-	intervalUpdate int
-	paginationSize scraper.PaginationWikileaks
-	batchSize      int
+	lastPage       int                         // Last max page available to index
+	scrapper       *scraper.Scrapper           // Scraper instance
+	isScraping     bool                        // Whether the scraper is running
+	status         *models.SafeMap             // Safe map to store the status
+	indexer        *database.Indexer           // Indexer instance
+	mu             *sync.Mutex                 // Mutex to synchronize access to the status
+	intervalUpdate int                         // Interval in rows to update the status
+	paginationSize scraper.PaginationWikileaks // Pagination size for the scraper
+	batchSize      int                         // Batch size for the indexer
 }
 
-const statusDirectory = "data"
-const statusFilename = "data200pag.json"
+const statusDirectory = "data"           // Directory to store the status
+const statusFilename = "data200pag.json" // File to store the status
 
+// NewCmd creates a new Cmd instance
 func NewCmd(db *database.Connection, parallelism, delayRequest int) *Cmd {
 	status := models.NewSafeMap()
 	var mu sync.Mutex
@@ -74,6 +77,7 @@ func (c *Cmd) SetIntervalUpdate(interval int) {
 	c.intervalUpdate = interval
 }
 
+// Execute starts the command line interface
 func (c *Cmd) Execute() {
 
 	statusLoaded, err := c.LoadPageResults(statusDirectory, statusFilename)
@@ -89,6 +93,7 @@ func (c *Cmd) Execute() {
 		c.lastPage = -1
 	}
 
+	fmt.Println("initializing in log Level [", config.GetConfig().LogLevel, "]")
 	c.printHelp()
 
 	for {
@@ -104,6 +109,7 @@ func (c *Cmd) Execute() {
 
 		args := strings.Fields(input)
 
+		// try to execute a command
 		switch args[0] {
 		case "index":
 			if c.isScraping {
@@ -146,6 +152,7 @@ func (c *Cmd) printHelp() {
 	fmt.Println("  help                    Show this help message")
 }
 
+// SavePageResults saves the page results to a file
 func (c *Cmd) SavePageResults(directory, filename string, data map[string]models.PageResult) error {
 	// create directory if it doesn't exist
 	if err := ensureDir(directory); err != nil {
@@ -163,6 +170,7 @@ func (c *Cmd) SavePageResults(directory, filename string, data map[string]models
 	return err
 }
 
+// LoadPageResults loads the page results from a file
 func (c *Cmd) LoadPageResults(directory, filename string) (map[string]models.PageResult, error) {
 
 	c.mu.Lock()

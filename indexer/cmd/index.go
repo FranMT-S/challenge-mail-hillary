@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"indexer/database"
 	"indexer/models"
 
 	log "github.com/sirupsen/logrus"
@@ -56,14 +55,16 @@ func (c *Cmd) Indexer(args []string) {
 		c.isScraping = false
 	}()
 
+	// Index emails in batches
 	go func() {
-		c.indexer.IndexEmail(emailsCh, database.DBTableName, c.batchSize)
+		c.indexer.IndexEmail(emailsCh, c.batchSize)
 	}()
 
+	// Update status in real time
 	go func() {
 		for result := range pageResultCh {
 			key := strconv.Itoa(result.Page)
-			log.WithFields(log.Fields{"page": result.Page, "total": result.Total, "state": result.State}).Debug("Update data page")
+			log.WithFields(log.Fields{"page": result.Page, "total": result.Total, "state": result.State}).Info("Update data page")
 			c.status.Set(key, result)
 			c.SavePageResults(statusDirectory, statusFilename, c.status.GetCopy())
 		}

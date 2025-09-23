@@ -16,9 +16,8 @@ func NewIndexer(db IDatabase) *Indexer {
 
 // IndexEmail indexes emails from a mailsCh channel
 // mailsCh: channel of ScraperResult
-// tableName: name of the table to index emails into
 // batchSize: number of emails to index at once
-func (i *Indexer) IndexEmail(mailsCh <-chan models.EmailResult, tableName string, batchSize int) error {
+func (i *Indexer) IndexEmail(mailsCh <-chan models.EmailResult, batchSize int) error {
 	batch := make([]models.Email, 0, batchSize)
 	totalInserted := 0
 	totalError := 0
@@ -35,7 +34,7 @@ func (i *Indexer) IndexEmail(mailsCh <-chan models.EmailResult, tableName string
 		batch = append(batch, *result.Email)
 
 		if len(batch) == batchSize {
-			if inserted, err := i.db.SendMails(tableName, batch); err != nil {
+			if inserted, err := i.db.SendMails(DBSchemaName, batch); err != nil {
 				log.Error(err)
 			} else {
 				totalInserted += int(inserted)
@@ -47,7 +46,7 @@ func (i *Indexer) IndexEmail(mailsCh <-chan models.EmailResult, tableName string
 	}
 
 	if len(batch) > 0 {
-		if inserted, err := i.db.SendMails(tableName, batch); err != nil {
+		if inserted, err := i.db.SendMails(DBSchemaName, batch); err != nil {
 			return err
 		} else {
 			totalInserted += int(inserted)
