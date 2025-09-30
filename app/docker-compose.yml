@@ -1,0 +1,13 @@
+services:
+  vue-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vue-app
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    restart: always
+    networks:
+      - app-network

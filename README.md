@@ -53,3 +53,15 @@ The database is a [cockroachdb](https://www.cockroachlabs.com/docs/v25.3/install
 * [API](./api/README.md)
 * [Indexer](./indexer/README.md)
 * [Client](./client/README.md)
+
+## Docker compose
+you can use docker compose to run the api and the client, after setup de environment variables in the .env file of the api and client folders.
+
+```bash
+docker-compose up
+```
+
+after run you must be able to access the client at http://localhost:5173 and the api at http://localhost:8080 if use the default ports.
+
+**After run the api and the client you must run the indexer to index the emails to populate the database** see more in [indexer](./indexer/README.md).
+

@@ -1,0 +1,15 @@
+.env
+*.env
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+.git
+.gitignore
+main
+*.exe
+*.out
+*.test
+
+
