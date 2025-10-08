@@ -53,13 +53,13 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# SG para ECS tasks (API + APP)
+# SG to ECS tasks (API + APP)
 resource "aws_security_group" "ecs_sg" {
   name        = "hillarymails-ecs-sg"
   description = "ECS tasks security group"
   vpc_id      = aws_vpc.main.id
 
-  # Permitir ALB hacia ECS
+  # allow ALB to ECS
   ingress {
     description      = "ALB to API"
     from_port        = 8080
@@ -70,24 +70,10 @@ resource "aws_security_group" "ecs_sg" {
 
   ingress {
     description      = "ALB to APP"
-    from_port        = 5173
-    to_port          = 5173
+    from_port        = 80
+    to_port          = 80
     protocol         = "tcp"
     security_groups  = [aws_security_group.alb_sg.id]
-  }
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -99,7 +85,7 @@ resource "aws_security_group" "ecs_sg" {
 }
 
 # -----------------------------
-# VPC y subnets (simplificado)
+# VPC and subnets (simplified)
 # -----------------------------
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"

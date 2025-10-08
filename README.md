@@ -53,6 +53,7 @@ The database is a [cockroachdb](https://www.cockroachlabs.com/docs/v25.3/install
 * [API](./api/README.md)
 * [Indexer](./indexer/README.md)
 * [Client](./client/README.md)
+* [Infrastructure](./terraform/README.md)
 
 ## Docker compose
 you can use docker compose to run the api and the client, after setup de environment variables in the .env file of the api and client folders.
