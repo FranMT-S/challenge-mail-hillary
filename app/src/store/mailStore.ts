@@ -4,6 +4,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { fetchMails as fetchMailsService } from "@/services/mailService";
 import {  DEFAULT_PAGINATION } from "@/constants/api";
 import { Operator, OrderBy, TypeSearch } from "@/models/mails";
+import { ErrorType } from "@/models/response";
 
 export const useMailStore = defineStore('mail', () => {
     
@@ -71,7 +72,10 @@ export const useMailStore = defineStore('mail', () => {
       cancelationToken.value?.signal
     );
 
-   
+
+    if(response.errorType === ErrorType.ABORT_ERROR){
+      return;
+    }
 
     if (response.status >= 400) {
         error.value = ''

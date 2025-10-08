@@ -1,4 +1,4 @@
-import { ApiResponse } from "@/models/response";
+import { ApiResponse, ErrorType } from "@/models/response";
 
 /**
  * Custom fetch function to handle API responses
@@ -14,14 +14,25 @@ export const customFetch = async <T>(input: RequestInfo | URL, init?: RequestIni
     data = await response.json();
     data.status = response.status;
   } catch (error) {
-    
-    console.error(`Invalid JSON, error: ${error}`);
-    data = {
-      msg: "Error",
-      error: "there was an error, try again later",
-      data: undefined,
-      status: 500,
+ 
+    if (error instanceof Error && error.name === "AbortError") {
+      data = {
+        msg: "Error",
+        error: "The request was aborted",
+        data: undefined,
+        status: 500,
+        errorType: ErrorType.ABORT_ERROR,
+      }
+    }else{
+      data = {
+        msg: "Error",
+        error: "there was an error, try again later",
+        data: undefined,
+        status: 500,
+        errorType: ErrorType.INVALID_JSON,
+      }
     }
+
   }
 
   return data;
