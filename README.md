@@ -63,5 +63,7 @@ docker-compose up
 
 after run you must be able to access the client at http://localhost:5173 and the api at http://localhost:8080 if use the default ports.
 
+this also will create a instance of cockroachdb in the cloud, you can use the connection string to connect to the database.
+
 **After run the api and the client you must run the indexer to index the emails to populate the database** see more in [indexer](./indexer/README.md).
 

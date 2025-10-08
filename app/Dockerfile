@@ -1,4 +1,4 @@
-
+# stage builder
 FROM node:22-alpine AS builder
 
 ARG VITE_API_URL
@@ -12,13 +12,17 @@ RUN yarn install --frozen-lockfile
 COPY . .
 RUN yarn build
 
-FROM node:22-alpine AS runner
 
-WORKDIR /app
+# stage runner
+FROM nginx:1.21.6-alpine
 
-COPY --from=builder /app/dist ./dist
+RUN apk add --no-cache gettext
 
-RUN yarn global add serve
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY env.js.template /usr/share/nginx/html/env.js.template
 
-EXPOSE 5173
-CMD ["serve", "-s", "dist", "-l", "5173"]
+COPY env.sh /docker-entrypoint.d/env.sh
+RUN chmod +x /docker-entrypoint.d/env.sh
+
+EXPOSE 80
+ENTRYPOINT ["/docker-entrypoint.d/env.sh"]
